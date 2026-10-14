@@ -1,0 +1,555 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum RegistrationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  INVITED
+  RESERVED
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SkillLevel {
+  BEGINNER
+  AVERAGE
+  ADVANCE
+}
+
+enum TournamentType {
+  RANDOM_PAIRING
+  FIXED_BRACKET
+}
+
+enum TournamentStatus {
+  SETUP
+  ACTIVE
+  COMPLETED
+}
+
+enum PlayerStatus {
+  WAITING // in the general pool, not yet queued for a game
+  QUEUED // assigned to an upcoming game
+  PLAYING // currently on court
+  RESTING // temporarily out (bathroom, break) - stays out of auto-matchmaking
+  LEFT // gone home / withdrew - eligible for substitution
+}
+
+enum GameStatus {
+  UPCOMING // sits in the "next 4-6 games" preview, not yet on a court
+  READY // assigned to a court, waiting for staff to press Start
+  IN_PROGRESS
+  PAUSED
+  FINISHED
+  CANCELLED
+}
+
+enum GameTeam {
+  A
+  B
+}
+
+enum UserRole {
+  SUPERADMIN
+  ADMIN
+  STAFF
+  PLAYER
+}
+
+enum PlayerJoinStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  EXPIRED
+  SUSPENDED
+}
+
+enum EventPaymentStatus {
+  UNPAID
+  PENDING
+  PAID
+  VERIFIED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentLedgerType {
+  EVENT_PAYMENT
+  OFFLINE_EVENT_PAYMENT
+  PLATFORM_COMMISSION
+  ACCRUED_PLATFORM_COMMISSION
+  PROCESSING_FEE
+  ORGANIZER_PAYOUT
+  SUBSCRIPTION_PAYMENT
+  REFUND
+}
+
+enum OrganizerPayoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+}
+
+model User {
+  id                                 String              @id @default(uuid())
+  username                           String              @unique
+  passwordHash                       String
+  bio                                String?             @default("")
+  avatarUrl                          String?
+  defaultAvatarKey                   String              @default("panda")
+  role                               UserRole            @default(PLAYER)
+  isBlocked                          Boolean             @default(false)
+  createdAt                          DateTime            @default(now())
+  trialStartedAt                     DateTime?
+  subscriptionExpiresAt              DateTime?
+  subscriptionStatus                 SubscriptionStatus?
+  subscriptionPaymentProofStoredFile String?
+  subscriptionPaymentSubmittedAt     DateTime?
+  subscriptionPaymentStatus          RegistrationStatus?
+  subscriptionPaymentAmountCents     Int?
+  payoutAccountEncrypted             String?
+
+  ownedTournaments          Tournament[]
+  playerProfiles            Player[]
+  auditLogs                 AuditLog[]
+  gameResultHistory         GameResultHistory[]
+  tournamentPosts           TournamentPost[]
+  registrations             RegistrationSubmission[]
+  participantRegistrations  RegistrationSubmission[] @relation("RegistrationParticipant")
+  notifications             Notification[]
+  profileVisitsReceived     ProfileVisit[]           @relation("ProfileVisitProfile")
+  profileVisitsMade         ProfileVisit[]           @relation("ProfileVisitVisitor")
+  paymentVerifications      RegistrationSubmission[] @relation("PaymentVerifier")
+  organizerPayouts          OrganizerPayout[]
+  subscriptionLedgerEntries PaymentLedgerEntry[]     @relation("SubscriptionPaymentEntries")
+}
+
+model ProfileVisit {
+  id         String   @id @default(uuid())
+  profileId  String
+  profile    User     @relation("ProfileVisitProfile", fields: [profileId], references: [id], onDelete: Cascade)
+  visitorId  String?
+  visitor    User?    @relation("ProfileVisitVisitor", fields: [visitorId], references: [id], onDelete: Cascade)
+  visitorKey String
+  visitedAt  DateTime @default(now())
+
+  @@unique([profileId, visitorKey])
+  @@index([profileId, visitedAt])
+}
+
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  message   String
+  actionUrl String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt, createdAt])
+}
+
+model PlatformSetting {
+  id                              String   @id @default("platform")
+  monthlyPriceCents               Int      @default(0)
+  subscriptionPaymentInstructions String?
+  eventCommissionBps              Int      @default(500)
+  updatedAt                       DateTime @updatedAt
+}
+
+model TournamentPost {
+  id                  String      @id @default(uuid())
+  hostId              String
+  host                User        @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  title               String
+  description         String
+  details             String?
+  paymentInstructions String?
+  location            String
+  amount              String?
+  capacity            Int?
+  divisions           Json?
+  paymentMethods      Json?
+  paymentQrStoredFile String?
+  registrationLink    String?
+  registrationFields  Json?
+  entryFeeCents       Int?
+  createdAt           DateTime    @default(now())
+  tournamentId        String?
+  tournament          Tournament? @relation(fields: [tournamentId], references: [id], onDelete: SetNull)
+
+  photos      TournamentPhoto[]
+  submissions RegistrationSubmission[]
+
+  @@index([tournamentId])
+}
+
+model TournamentPhoto {
+  id         String         @id @default(uuid())
+  postId     String
+  post       TournamentPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  url        String
+  storedFile String
+  data       Bytes?
+  mimeType   String?
+  uploadedAt DateTime       @default(now())
+
+  @@index([postId])
+  @@index([uploadedAt])
+}
+
+model RegistrationSubmission {
+  id                      String               @id @default(uuid())
+  postId                  String
+  post                    TournamentPost       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId                  String
+  user                    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers                 Json?
+  submittedAt             DateTime             @default(now())
+  status                  RegistrationStatus   @default(PENDING)
+  applicantName           String
+  skillLevel              SkillLevel
+  participantUserId       String?
+  participantUser         User?                @relation("RegistrationParticipant", fields: [participantUserId], references: [id], onDelete: SetNull)
+  contact                 String?
+  division                String?
+  paymentMethod           String?
+  paymentProofUrl         String?
+  paymentProofStoredFile  String?
+  paymentStatus           EventPaymentStatus   @default(UNPAID)
+  paymentVerifiedAt       DateTime?
+  paymentVerifiedById     String?
+  paymentVerifiedBy       User?                @relation("PaymentVerifier", fields: [paymentVerifiedById], references: [id], onDelete: SetNull)
+  paymentVerificationNote String?
+  payments                EventPayment[]
+  ledgerEntries           PaymentLedgerEntry[]
+
+  @@unique([postId, participantUserId])
+  @@index([postId])
+  @@index([postId, userId])
+  @@index([postId, status])
+}
+
+model EventPayment {
+  id                  String                 @id @default(uuid())
+  registrationId      String
+  registration        RegistrationSubmission @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  referenceNumber     String                 @unique
+  providerCheckoutId  String?                @unique
+  providerCheckoutUrl String?
+  providerPaymentId   String?                @unique
+  status              EventPaymentStatus     @default(PENDING)
+  grossAmountCents    Int
+  commissionCents     Int
+  processingFeeCents  Int                    @default(0)
+  currency            String                 @default("PHP")
+  paidAt              DateTime?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  ledgerEntries       PaymentLedgerEntry[]
+
+  @@index([registrationId, status])
+  @@index([status, createdAt])
+}
+
+model PaymentLedgerEntry {
+  id             String                  @id @default(uuid())
+  idempotencyKey String                  @unique
+  type           PaymentLedgerType
+  amountCents    Int
+  currency       String                  @default("PHP")
+  description    String
+  eventPaymentId String?
+  eventPayment   EventPayment?           @relation(fields: [eventPaymentId], references: [id], onDelete: SetNull)
+  registrationId String?
+  registration   RegistrationSubmission? @relation(fields: [registrationId], references: [id], onDelete: SetNull)
+  payoutId       String?
+  payout         OrganizerPayout?        @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+  userId         String?
+  user           User?                   @relation("SubscriptionPaymentEntries", fields: [userId], references: [id], onDelete: SetNull)
+  createdAt      DateTime                @default(now())
+
+  @@index([type, createdAt])
+  @@index([registrationId])
+}
+
+model OrganizerPayout {
+  id                 String                @id @default(uuid())
+  organizerId        String
+  organizer          User                  @relation(fields: [organizerId], references: [id], onDelete: Restrict)
+  tournamentId       String                @unique
+  tournament         Tournament            @relation(fields: [tournamentId], references: [id], onDelete: Restrict)
+  amountCents        Int
+  transferFeeCents   Int                   @default(0)
+  currency           String                @default("PHP")
+  status             OrganizerPayoutStatus @default(PENDING)
+  providerTransferId String?               @unique
+  failureReason      String?
+  requestedAt        DateTime              @default(now())
+  paidAt             DateTime?
+  ledgerEntries      PaymentLedgerEntry[]
+
+  @@index([organizerId, status])
+}
+
+model Player {
+  id           String           @id @default(uuid())
+  name         String
+  contact      String?
+  skillLevel   SkillLevel
+  status       PlayerStatus     @default(WAITING)
+  tournamentId String
+  tournament   Tournament       @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  userId       String?
+  user         User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  joinStatus   PlayerJoinStatus @default(APPROVED)
+  arrivalAt    DateTime         @default(now())
+  createdAt    DateTime         @default(now())
+
+  gamePlayers    GamePlayer[]
+  bracketEntries BracketEntry[]
+  queueEntries   QueueEntry[]
+
+  @@unique([tournamentId, userId])
+  @@index([tournamentId])
+}
+
+model Tournament {
+  id                String           @id @default(uuid())
+  name              String
+  type              TournamentType
+  status            TournamentStatus @default(SETUP)
+  ownerId           String?
+  owner             User?            @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  createdAt         DateTime         @default(now())
+  locationName      String?
+  locationAddress   String?
+  locationLatitude  Float?
+  locationLongitude Float?
+
+  // Operator-set tournament window, e.g. 4:00 PM - 9:00 PM. When
+  // scheduledEnd is a reminder for the operator to review results; final
+  // standings are recorded only after explicit operator confirmation.
+  scheduledStart     DateTime?
+  scheduledEnd       DateTime?
+  resultsFinalizedAt DateTime?
+  finalStandings     Json?
+
+  players         Player[]
+  courts          Court[]
+  games           Game[]
+  brackets        Bracket[]
+  queue           QueueEntry[]
+  raffleDraws     RaffleDraw[]
+  auditLogs       AuditLog[]
+  posts           TournamentPost[]
+  organizerPayout OrganizerPayout?
+
+  @@index([ownerId])
+}
+
+model Court {
+  id           String     @id @default(uuid())
+  label        String // e.g. "Court 1"
+  isEnabled    Boolean    @default(true)
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  games Game[]
+
+  @@index([tournamentId])
+}
+
+model Game {
+  id             String        @id @default(uuid())
+  tournamentId   String
+  tournament     Tournament    @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  courtId        String?
+  court          Court?        @relation(fields: [courtId], references: [id])
+  bracketMatchId String?       @unique
+  bracketMatch   BracketMatch? @relation(fields: [bracketMatchId], references: [id])
+
+  status        GameStatus @default(UPCOMING)
+  isTiebreaker  Boolean    @default(false)
+  queuePosition Int? // ordering within the "next 4-6" preview
+
+  durationSeconds  Int       @default(900) // default 15-minute timer, staff-editable
+  remainingSeconds Int       @default(900)
+  startedAt        DateTime?
+  pausedAt         DateTime?
+  finishedAt       DateTime?
+
+  winningTeam GameTeam?
+  scoreA      Int?
+  scoreB      Int?
+
+  createdAt DateTime @default(now())
+
+  players       GamePlayer[]
+  resultHistory GameResultHistory[]
+
+  @@index([tournamentId, status])
+  @@index([courtId])
+}
+
+model GamePlayer {
+  id       String   @id @default(uuid())
+  gameId   String
+  game     Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  playerId String
+  player   Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  team     GameTeam
+
+  @@unique([gameId, playerId])
+  @@index([playerId])
+}
+
+model GameResultHistory {
+  id          String   @id @default(uuid())
+  gameId      String
+  game        Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  actorId     String?
+  actor       User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  winningTeam GameTeam
+  scoreA      Int
+  scoreB      Int
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@index([gameId, createdAt])
+  @@index([actorId])
+}
+
+model AuditLog {
+  id           String     @id @default(uuid())
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  actorId      String?
+  actor        User?      @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action       String
+  entityType   String
+  entityId     String?
+  details      Json?
+  createdAt    DateTime   @default(now())
+
+  @@index([tournamentId, createdAt])
+  @@index([actorId])
+}
+
+model RaffleDraw {
+  id               String     @id @default(uuid())
+  tournamentId     String
+  tournament       Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  prizeDescription String
+  winnerName       String
+  participantNames Json
+  createdAt        DateTime   @default(now())
+
+  @@index([tournamentId, createdAt])
+}
+
+model SiteContent {
+  id        String   @id
+  content   Json
+  draft     Json?
+  updatedAt DateTime @updatedAt
+}
+
+model SiteContentRevision {
+  id          String   @id @default(uuid())
+  content     Json
+  publishedAt DateTime @default(now())
+  actorId     String
+  actorName   String
+
+  @@index([publishedAt])
+}
+
+// Simple FIFO / priority queue of players waiting to be matched into the
+// next UPCOMING game slots for RANDOM_PAIRING tournaments.
+model QueueEntry {
+  id           String     @id @default(uuid())
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  playerId     String
+  player       Player     @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  enqueuedAt   DateTime   @default(now())
+
+  @@unique([tournamentId, playerId])
+}
+
+// --- Fixed bracket tournaments ---
+
+enum BracketFormat {
+  SINGLE_ELIMINATION
+  DOUBLE_ELIMINATION
+  ROUND_ROBIN
+}
+
+model Bracket {
+  id           String        @id @default(uuid())
+  tournamentId String
+  tournament   Tournament    @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  name         String        @default("Main Bracket")
+  format       BracketFormat @default(SINGLE_ELIMINATION)
+  createdAt    DateTime      @default(now())
+
+  entries BracketEntry[]
+  matches BracketMatch[]
+}
+
+// A bracket "entry" is a fixed pair (team) registered together before the draw.
+model BracketEntry {
+  id        String  @id @default(uuid())
+  bracketId String
+  bracket   Bracket @relation(fields: [bracketId], references: [id], onDelete: Cascade)
+  seed      Int?
+  teamName  String?
+
+  playerAId String
+  playerA   Player @relation(fields: [playerAId], references: [id])
+
+  // player B is optional at creation time (can be filled in later / substituted)
+  playerBId String?
+}
+
+model BracketMatch {
+  id        String  @id @default(uuid())
+  bracketId String
+  bracket   Bracket @relation(fields: [bracketId], references: [id], onDelete: Cascade)
+
+  // "WINNERS" | "LOSERS" | "GRAND_FINAL" | "ROUND_ROBIN"
+  bracketSide String  @default("WINNERS")
+  round       Int
+  slot        Int // position within the round/side
+  label       String? // display label, e.g. "Round 1", "Losers Round 2", "Grand Final"
+
+  // Where the WINNER of this match goes next, and which slot they fill there.
+  nextMatchId String?
+  nextSlot    String? // "A" | "B"
+
+  // Double-elimination only: where the LOSER of this match drops to.
+  loserNextMatchId String?
+  loserNextSlot    String? // "A" | "B"
+
+  entryAId      String?
+  entryBId      String?
+  winnerEntryId String? // set once this match has a result (incl. byes)
+
+  game Game?
+
+  @@index([bracketId, bracketSide, round])
+}

@@ -1,0 +1,216 @@
+import { prisma } from "./prisma";
+import { Prisma } from "@prisma/client";
+import { buildQueueBatch, lineupKey, QueuedPlayer } from "./matchmaking";
+import { computeLeaderboard } from "./leaderboard";
+
+type DatabaseClient = typeof prisma | Prisma.TransactionClient;
+
+const UPCOMING_PREVIEW_SIZE = 6; // "4-6 waiting games" shown on kiosk
+
+async function withTournamentLock<T>(tournamentId: string, work: (db: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tournamentId}))`;
+    return work(tx);
+  }, { maxWait: 10_000, timeout: 30_000 });
+}
+
+/**
+ * Refills the UPCOMING game preview for a RANDOM_PAIRING tournament.
+ *
+ * 1. Looks at players currently in the tournament's queue (status WAITING,
+ *    enqueued, not already in a live/queued game).
+ * 2. Draws as many valid doubles games as needed to reach the preview size,
+ *    respecting the skill-pairing rule via buildQueueBatch/bunot-bunot draw.
+ * 3. Creates Game rows with status UPCOMING (no court assigned yet).
+ *
+ * Leftover players who can't be matched (e.g. all remaining are Advance
+ * with no Beginners left) stay in the queue untouched for the next refill.
+ */
+async function refillUpcomingQueueUnlocked(tournamentId: string, minPreview = 4, maxPreview?: number, db: DatabaseClient = prisma) {
+  // Always draw enough games to seat every enabled court plus a small
+  // preview buffer, so a draw never leaves courts empty just because the
+  // default preview size (6) was smaller than the number of courts.
+  const enabledCourts = await db.court.count({ where: { tournamentId, isEnabled: true } });
+  const effectiveMaxPreview = maxPreview ?? Math.max(UPCOMING_PREVIEW_SIZE, enabledCourts + 2);
+
+  const existingUpcoming = await db.game.count({
+    where: { tournamentId, status: "UPCOMING" },
+  });
+  const slotsToFill = Math.max(0, effectiveMaxPreview - existingUpcoming);
+  if (slotsToFill === 0) return { created: 0 };
+
+  const tournament = await db.tournament.findUnique({
+    where: { id: tournamentId },
+    select: { type: true, scheduledEnd: true },
+  });
+  if (tournament?.type !== "RANDOM_PAIRING") return { created: 0, remainingInQueue: 0 };
+  if (tournament?.scheduledEnd && tournament.scheduledEnd.getTime() - Date.now() < 20 * 60 * 1000) {
+    return { created: 0, remainingInQueue: 0 };
+  }
+  const finalPhase = !!tournament?.scheduledEnd && tournament.scheduledEnd.getTime() - Date.now() <= 45 * 60 * 1000;
+
+  const queueEntries = await db.queueEntry.findMany({
+    where: { tournamentId },
+    include: {
+      player: {
+        include: {
+          gamePlayers: {
+            where: { game: { status: "FINISHED" } },
+              select: { team: true, game: { select: { winningTeam: true } } },
+          },
+        },
+      },
+    },
+    orderBy: { enqueuedAt: "asc" },
+  });
+
+  const finishedGames = await db.game.findMany({
+    where: { tournamentId, status: { not: "CANCELLED" } },
+    select: { players: { select: { playerId: true, team: true } } },
+  });
+  const usedLineupKeys = new Set(
+    finishedGames
+      .filter((game) => game.players.length === 4)
+      .map((game) => lineupKey(game.players.map((player) => player.playerId)))
+  );
+  const recentPartners = new Map<string, Set<string>>();
+  const recentOpponents = new Map<string, Set<string>>();
+  for (const game of finishedGames) {
+    const teamA = game.players.filter((player) => player.team === "A").map((player) => player.playerId);
+    const teamB = game.players.filter((player) => player.team === "B").map((player) => player.playerId);
+    for (const team of [teamA, teamB]) {
+      for (const playerId of team) {
+        const partners = recentPartners.get(playerId) ?? new Set<string>();
+        team.filter((id) => id !== playerId).forEach((id) => partners.add(id));
+        recentPartners.set(playerId, partners);
+      }
+    }
+    for (const [team, opponents] of [[teamA, teamB], [teamB, teamA]] as const) {
+      for (const playerId of team) {
+        const previousOpponents = recentOpponents.get(playerId) ?? new Set<string>();
+        opponents.forEach((id) => previousOpponents.add(id));
+        recentOpponents.set(playerId, previousOpponents);
+      }
+    }
+  }
+
+  const pool: QueuedPlayer[] = queueEntries
+    .filter((q) => q.player.status === "WAITING" && q.player.joinStatus === "APPROVED")
+    .map((q) => ({
+      id: q.player.id,
+      name: q.player.name,
+      skillLevel: q.player.skillLevel,
+      gamesPlayed: q.player.gamePlayers.length,
+      arrivalAt: q.player.arrivalAt.getTime(),
+      queuedAt: q.enqueuedAt.getTime(),
+      wins: q.player.gamePlayers.filter((game) => game.game.winningTeam === game.team).length,
+      losses: q.player.gamePlayers.filter((game) => !!game.game.winningTeam && game.game.winningTeam !== game.team).length,
+      recentPartnerIds: recentPartners.get(q.player.id) ?? new Set<string>(),
+      recentOpponentIds: recentOpponents.get(q.player.id) ?? new Set<string>(),
+    }));
+
+  let leaderIds = new Set<string>();
+  if (finalPhase) {
+    const standings = await computeLeaderboard(tournamentId);
+    const leader = standings[0];
+    if (leader && leader.wins > 0) {
+      leaderIds = new Set(
+        standings
+          .filter((row) => row.wins === leader.wins && row.winPct === leader.winPct && row.losses === leader.losses)
+          .map((row) => row.playerId)
+      );
+    }
+  }
+
+  const { games } = buildQueueBatch(pool, slotsToFill, {
+    finalPhase,
+    leaderIds,
+    usedLineupKeys,
+  });
+
+  let created = 0;
+  for (const g of games) {
+    const nextGame = await db.game.create({
+      data: {
+        tournamentId,
+        status: "UPCOMING",
+        players: {
+          create: [
+            { playerId: g.teamA[0].id, team: "A" },
+            { playerId: g.teamA[1].id, team: "A" },
+            { playerId: g.teamB[0].id, team: "B" },
+            { playerId: g.teamB[1].id, team: "B" },
+          ],
+        },
+      },
+    });
+
+    const playerIds = [...g.teamA, ...g.teamB].map((p) => p.id);
+    await db.player.updateMany({
+      where: { id: { in: playerIds } },
+      data: { status: "QUEUED" },
+    });
+    await db.queueEntry.deleteMany({ where: { tournamentId, playerId: { in: playerIds } } });
+    created++;
+    void nextGame;
+  }
+
+  return { created, remainingInQueue: pool.length - created * 4 };
+}
+
+export function refillUpcomingQueue(tournamentId: string, minPreview = 4, maxPreview?: number) {
+  return withTournamentLock(tournamentId, (db) => refillUpcomingQueueUnlocked(tournamentId, minPreview, maxPreview, db));
+}
+
+/** Assigns the oldest UPCOMING game to a free, enabled court and marks it READY. */
+export async function assignNextGameToFreeCourt(tournamentId: string) {
+  const freeCourt = await prisma.court.findFirst({
+    where: {
+      tournamentId,
+      isEnabled: true,
+      games: { none: { status: { in: ["READY", "IN_PROGRESS", "PAUSED"] } } },
+    },
+  });
+  if (!freeCourt) return null;
+
+  const nextGame = await prisma.game.findFirst({
+    where: { tournamentId, status: "UPCOMING" },
+    orderBy: { createdAt: "asc" },
+  });
+  if (!nextGame) return null;
+
+  return prisma.game.update({
+    where: { id: nextGame.id },
+    data: { courtId: freeCourt.id, status: "READY" },
+  });
+}
+
+/**
+ * Seats EVERY free, enabled court with the next available UPCOMING game -
+ * not just one. Call this instead of assignNextGameToFreeCourt anywhere
+ * multiple courts might be open at once (after a draw, after a game
+ * finishes, after a court is re-enabled), so all courts get used.
+ */
+async function assignAllFreeCourtsUnlocked(tournamentId: string) {
+  const assignedGameIds: string[] = [];
+  while (true) {
+    const assigned = await assignNextGameToFreeCourt(tournamentId);
+    if (!assigned) break;
+    assignedGameIds.push(assigned.id);
+  }
+  return assignedGameIds;
+}
+
+export function assignAllFreeCourts(tournamentId: string) {
+  return withTournamentLock(tournamentId, () => assignAllFreeCourtsUnlocked(tournamentId));
+}
+
+/** Adds a player back into the waiting pool / queue (e.g. after finishing a game, or a walk-in registrant). */
+export async function enqueuePlayer(tournamentId: string, playerId: string, db: DatabaseClient = prisma) {
+  await db.player.update({ where: { id: playerId }, data: { status: "WAITING" } });
+  return db.queueEntry.upsert({
+    where: { tournamentId_playerId: { tournamentId, playerId } },
+    update: {},
+    create: { tournamentId, playerId },
+  });
+}

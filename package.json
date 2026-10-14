@@ -1,0 +1,15 @@
+{
+  "name": "club-lorenzo",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "concurrently \"npm --prefix frontend run dev\" \"npm --prefix backend run dev\"",
+    "build": "npm --prefix frontend run build && npm --prefix backend run build",
+    "test": "npm --prefix backend run test && npm --prefix frontend run typecheck",
+    "check": "npm --prefix frontend run check && npm --prefix backend run check",
+    "start": "npm --prefix backend run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

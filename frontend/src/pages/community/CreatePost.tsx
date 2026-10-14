@@ -1,0 +1,396 @@
+import { useEffect, useState, FormEvent } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { api, fileUrl } from "../../lib/api";
+import type { EventDivisionName, EventPaymentMethod, PostDetail, RegistrationField, RegistrationFieldType, Tournament } from "../../lib/api";
+import TournamentLocationMap from "../../components/TournamentLocationMap";
+import PageHeader from "../../components/PageHeader";
+
+const FIELD_TYPES: RegistrationFieldType[] = ["text", "textarea", "number", "email", "phone"];
+const DIVISIONS: { name: EventDivisionName; label: string }[] = [
+  { name: "BEGINNER", label: "Beginner" },
+  { name: "NOVICE", label: "Novice" },
+  { name: "LOW_INTERMEDIATE", label: "Low intermediate" },
+  { name: "HIGH_INTERMEDIATE", label: "High intermediate" },
+];
+
+export default function CreatePost() {
+  const navigate = useNavigate();
+  const locationState = useLocation().state as { notice?: string } | null;
+  const { postId } = useParams();
+  const isEditing = !!postId;
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [details, setDetails] = useState("");
+  const [paymentInstructions, setPaymentInstructions] = useState("");
+  const [location, setLocation] = useState("");
+  const [locationAddress, setLocationAddress] = useState("");
+  const [locationLatitude, setLocationLatitude] = useState<number | null>(null);
+  const [locationLongitude, setLocationLongitude] = useState<number | null>(null);
+  const [amount, setAmount] = useState("");
+  const [entryFee, setEntryFee] = useState("");
+  const [scheduledStart, setScheduledStart] = useState("");
+  const [scheduledEnd, setScheduledEnd] = useState("");
+  const [registrationLink, setRegistrationLink] = useState("");
+  const [fields, setFields] = useState<RegistrationField[]>([]);
+  const [photos, setPhotos] = useState<FileList | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [tournaments, setTournaments] = useState<Tournament[]>([]);
+  const [tournamentId, setTournamentId] = useState("");
+  const [tournamentType, setTournamentType] = useState<"RANDOM_PAIRING" | "FIXED_BRACKET">("RANDOM_PAIRING");
+  const [divisionCapacities, setDivisionCapacities] = useState<Record<EventDivisionName, string>>({
+    BEGINNER: "", NOVICE: "", LOW_INTERMEDIATE: "", HIGH_INTERMEDIATE: "",
+  });
+  const [paymentMethods, setPaymentMethods] = useState<EventPaymentMethod[]>(["IN_PERSON"]);
+  const [paymentQrFile, setPaymentQrFile] = useState<File | null>(null);
+  const [paymentQrPreviewUrl, setPaymentQrPreviewUrl] = useState<string | null>(null);
+  const [existingQrUrl, setExistingQrUrl] = useState<string | null>(null);
+  const [paymentQrRemoved, setPaymentQrRemoved] = useState(false);
+  const [loaded, setLoaded] = useState(!postId);
+
+  useEffect(() => {
+    api.get<Tournament[]>("/tournaments").then(({ data }) => setTournaments(data.filter((t) => t.status !== "COMPLETED")));
+    if (postId) {
+      api.get<PostDetail>(`/posts/${postId}`).then(({ data }) => {
+        if (!data.isOwner) throw new Error("Only the event host can edit this event.");
+        setTitle(data.title);
+        setDescription(data.description);
+        setDetails(data.details ?? "");
+        setPaymentInstructions(data.paymentInstructions ?? "");
+        setLocation(data.location);
+        setLocationAddress(data.locationAddress ?? "");
+        setLocationLatitude(data.locationLatitude ?? null);
+        setLocationLongitude(data.locationLongitude ?? null);
+        setAmount(data.amount ?? "");
+        setEntryFee(data.entryFeeCents != null ? (data.entryFeeCents / 100).toFixed(2) : "");
+        setScheduledStart(toLocalDateTime(data.scheduledStart));
+        setScheduledEnd(toLocalDateTime(data.scheduledEnd));
+        setRegistrationLink(data.registrationLink ?? "");
+        setFields(data.registrationFields);
+        setTournamentId(data.tournamentId ?? "");
+        setDivisionCapacities(Object.fromEntries(DIVISIONS.map(({ name }) => [name, data.divisions.find((division) => division.name === name)?.capacity.toString() ?? ""])) as Record<EventDivisionName, string>);
+        setPaymentMethods(data.paymentMethods);
+        setExistingQrUrl(data.paymentQrUrl ?? null);
+        setPaymentQrRemoved(false);
+      }).catch((err: any) => setError(err?.message || "Could not load this event."))
+        .finally(() => setLoaded(true));
+    }
+  }, [postId]);
+
+  useEffect(() => {
+    if (!paymentQrFile) {
+      setPaymentQrPreviewUrl(null);
+      return;
+    }
+    const previewUrl = URL.createObjectURL(paymentQrFile);
+    setPaymentQrPreviewUrl(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [paymentQrFile]);
+
+  function addField() {
+    setFields([...fields, { label: "", type: "text", required: false }]);
+  }
+  function updateField(i: number, patch: Partial<RegistrationField>) {
+    setFields(fields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
+  }
+  function removeField(i: number) {
+    setFields(fields.filter((_, idx) => idx !== i));
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const divisions = DIVISIONS.flatMap(({ name }) => divisionCapacities[name].trim()
+      ? [{ name, capacity: Number(divisionCapacities[name]) }]
+      : []);
+    if (divisions.length === 0) {
+      setError("Choose at least one player division and set its capacity.");
+      return;
+    }
+    if (divisions.some((division) => !Number.isInteger(division.capacity) || division.capacity < 1 || division.capacity > 1000)) {
+      setError("Each selected division needs a whole-number capacity between 1 and 1,000 players.");
+      return;
+    }
+    if (paymentMethods.length === 0) {
+      setError("Choose at least one payment option.");
+      return;
+    }
+    const entryFeeCents = entryFee.trim() ? Math.round(Number(entryFee) * 100) : 0;
+    if (!Number.isFinite(entryFeeCents) || entryFeeCents < 0 || entryFeeCents > 100000000) {
+      setError("Enter a valid entry fee in PHP (up to ₱1,000,000).");
+      return;
+    }
+    if (!isEditing && (locationLatitude === null || locationLongitude === null)) {
+      setError("Pin the venue on the map before publishing.");
+      return;
+    }
+    if (paymentMethods.includes("QR") && !paymentQrFile && (!existingQrUrl || paymentQrRemoved)) {
+      setError("Upload the payment QR image or remove QR payment from the options.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const cleanFields = fields.filter((f) => f.label.trim().length > 0);
+      const payload = {
+        title,
+        description,
+        details: isEditing ? details || null : details || undefined,
+        paymentInstructions: isEditing ? paymentInstructions || null : paymentInstructions || undefined,
+        location,
+        locationAddress: locationAddress || null,
+        locationLatitude,
+        locationLongitude,
+        amount: isEditing ? amount : amount || undefined,
+        entryFeeCents,
+        capacity: divisions.reduce((total, division) => total + division.capacity, 0),
+        divisions,
+        paymentMethods,
+        scheduledStart: scheduledStart ? new Date(scheduledStart).toISOString() : isEditing ? null : undefined,
+        scheduledEnd: scheduledEnd ? new Date(scheduledEnd).toISOString() : isEditing ? null : undefined,
+        registrationLink: isEditing ? registrationLink : registrationLink || undefined,
+        registrationFields: isEditing ? cleanFields : cleanFields.length > 0 ? cleanFields : undefined,
+        tournamentId: tournamentId || undefined,
+        tournamentType,
+      };
+      const { data } = isEditing
+        ? await api.patch(`/posts/${postId}`, payload)
+        : await api.post("/posts", payload);
+
+      if (paymentQrFile) {
+        const form = new FormData();
+        form.append("qr", paymentQrFile);
+        try {
+          await api.post(`/posts/${data.id}/payment-qr`, form, { headers: { "Content-Type": "multipart/form-data" } });
+        } catch {
+          navigate(`/community/${data.id}/edit`, { state: { notice: "Event saved, but the QR image did not upload. Choose it again and save." } });
+          return;
+        }
+      } else if (paymentQrRemoved && existingQrUrl && isEditing) {
+        await api.delete(`/posts/${data.id}/payment-qr`);
+      }
+
+      if (photos && photos.length > 0) {
+        const form = new FormData();
+        Array.from(photos).forEach((file) => form.append("photos", file));
+        await api.post(`/posts/${data.id}/photos`, form, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      }
+
+      navigate(`/community/${data.id}`);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Couldn't create the post. Please check the form and try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white outline-none focus:border-ball";
+
+  return (
+    <div className="max-w-2xl space-y-5">
+      <PageHeader eyebrow="Club events" title={isEditing ? "Edit event" : "Publish an event"} description="Share clear event details so players know what to expect and how to join." />
+      {locationState?.notice && <p className="mb-4 text-sm text-advance">{locationState.notice}</p>}
+      {!loaded ? <p className="text-sm text-white/60">Loading event…</p> : <form onSubmit={onSubmit} className="space-y-5">
+        <div>
+          <label className="block text-sm text-white/70 mb-1">Title</label>
+          <input className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} required />
+        </div>
+        <div>
+          <label className="block text-sm text-white/70 mb-1">Description</label>
+          <textarea
+            className={inputClass}
+            rows={3}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            required
+          />
+        </div>
+        <div><label className="block text-sm text-white/70 mb-1">Starts</label><input className={inputClass} type="datetime-local" value={scheduledStart} onChange={(e) => setScheduledStart(e.target.value)} required={!isEditing} /></div>
+        <div>
+          <label className="block text-sm text-white/70 mb-1">Venue name</label>
+          <input className={inputClass} value={location} onChange={(e) => setLocation(e.target.value)} required />
+        </div>
+        <details className="rounded-lg border border-white/10 p-4">
+          <summary className="cursor-pointer font-display font-semibold text-white">Optional event details</summary>
+          <div className="mt-4 space-y-4">
+            <label className="block text-sm text-white/70">More details
+              <textarea className={`${inputClass} mt-1`} rows={3} value={details} onChange={(e) => setDetails(e.target.value)} placeholder="Format, rules, or other information" />
+            </label>
+            <label className="block text-sm text-white/70">Prize or event note
+              <input className={`${inputClass} mt-1`} placeholder="e.g. ₱500 prize pool" value={amount} onChange={(e) => setAmount(e.target.value)} />
+            </label>
+            <label className="block text-sm text-white/70">End date and time
+              <input className={`${inputClass} mt-1`} type="datetime-local" value={scheduledEnd} onChange={(e) => setScheduledEnd(e.target.value)} />
+            </label>
+          </div>
+        </details>
+        <div>
+          <label className="block text-sm text-white/70 mb-1">Entry fee per player (PHP; leave blank for free)</label>
+          <input className={inputClass} type="number" min="0.01" max="1000000" step="0.01" placeholder="e.g. 200.00" value={entryFee} onChange={(event) => {
+            const nextFee = event.target.value;
+            if (entryFee.trim() && !nextFee.trim()) {
+              setPaymentMethods((current) => {
+                const manualMethods = current.filter((method) => method !== "PAYMONGO");
+                return manualMethods.length > 0 ? manualMethods : ["IN_PERSON"];
+              });
+            }
+            setEntryFee(nextFee);
+          }} />
+          <p className="mt-1 text-xs text-white/45">Choose one or more ways players can pay. Online checkout is only available when the club’s payment provider is configured.</p>
+        </div>
+        <section className="space-y-3 rounded-lg border border-white/10 p-4">
+          <div><h2 className="font-display font-semibold text-white">Venue location</h2><p className="text-xs text-white/50">The map starts in Polomolok, South Cotabato. Click the court’s exact location to place the pin.</p></div>
+          <textarea className={inputClass} rows={2} value={locationAddress} onChange={(e) => setLocationAddress(e.target.value)} placeholder="Street address, Polomolok, South Cotabato" />
+          <div className="overflow-hidden rounded-lg border border-white/10">
+            <TournamentLocationMap
+              latitude={locationLatitude}
+              longitude={locationLongitude}
+              editable
+              onChange={(latitude, longitude) => { setLocationLatitude(latitude); setLocationLongitude(longitude); }}
+            />
+          </div>
+          <p className="text-xs text-white/45">{locationLatitude !== null && locationLongitude !== null ? `Pinned at ${locationLatitude.toFixed(5)}, ${locationLongitude.toFixed(5)}` : "No map pin selected"}</p>
+        </section>
+        <details className="rounded-lg border border-white/10 p-4">
+          <summary className="cursor-pointer font-display font-semibold text-white">Player divisions and capacity (required)</summary>
+          <div className="mt-3 space-y-3">
+            <p className="text-xs text-white/50">Open this section, select at least one player level, and set its available spots.</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {DIVISIONS.map(({ name, label }) => {
+                const selected = divisionCapacities[name] !== "";
+                return <div key={name} className="rounded-lg border border-white/10 p-3">
+                  <label className="flex items-center gap-2 text-sm font-medium text-white"><input type="checkbox" checked={selected} onChange={(event) => setDivisionCapacities((current) => ({ ...current, [name]: event.target.checked ? current[name] || "16" : "" }))} />{label}</label>
+                  {selected && <label className="mt-3 block text-xs text-white/55">Available spots<input className={`${inputClass} mt-1`} type="number" min="1" max="1000" step="1" value={divisionCapacities[name]} onChange={(event) => setDivisionCapacities((current) => ({ ...current, [name]: event.target.value }))} /></label>}
+                </div>;
+              })}
+            </div>
+            {Object.values(divisionCapacities).some(Boolean) && <p className="text-xs text-white/55">Total event capacity: {Object.values(divisionCapacities).reduce((sum, value) => sum + (Number(value) || 0), 0)}</p>}
+          </div>
+        </details>
+        <section className="space-y-3 rounded-lg border border-white/10 p-4">
+          <div><h2 className="font-display font-semibold text-white">How can players pay?</h2><p className="text-xs text-white/50">Select every option you accept. Players will see the selected methods on this event.</p></div>
+          <div className="flex flex-wrap gap-5">
+            <label className={`flex items-center gap-2 text-sm ${Number(entryFee) > 0 ? "text-white/75" : "text-white/35"}`}><input type="checkbox" disabled={Number(entryFee) <= 0} checked={paymentMethods.includes("PAYMONGO")} onChange={(event) => setPaymentMethods((current) => event.target.checked ? [...current, "PAYMONGO"] : current.filter((method) => method !== "PAYMONGO"))} />Online checkout {Number(entryFee) <= 0 && "(requires an entry fee)"}</label>
+            <label className="flex items-center gap-2 text-sm text-white/75"><input type="checkbox" checked={paymentMethods.includes("QR")} onChange={(event) => setPaymentMethods((current) => event.target.checked ? [...current, "QR"] : current.filter((method) => method !== "QR"))} />QR / e-wallet</label>
+            <label className="flex items-center gap-2 text-sm text-white/75"><input type="checkbox" checked={paymentMethods.includes("IN_PERSON")} onChange={(event) => setPaymentMethods((current) => event.target.checked ? [...current, "IN_PERSON"] : current.filter((method) => method !== "IN_PERSON"))} />Pay in person</label>
+          </div>
+          {paymentMethods.includes("QR") && <div className="space-y-2">
+            <p className="text-xs text-white/55">Upload the QR image players should scan. It will be shown on the event page to everyone.</p>
+            <label htmlFor="payment-qr-file" className="block text-sm text-white/70">Payment QR image (JPEG, PNG, or WEBP; up to 8 MB)</label>
+            <input id="payment-qr-file" type="file" accept="image/jpeg,image/png,image/webp" required={paymentMethods.includes("QR") && !existingQrUrl} onChange={(event) => { setPaymentQrFile(event.target.files?.[0] ?? null); setPaymentQrRemoved(false); }} className="text-sm text-white/70" />
+            {paymentQrPreviewUrl && <img src={paymentQrPreviewUrl} alt="Preview of the new event payment QR" className="h-40 w-40 rounded-lg bg-white object-contain p-2" />}
+            {paymentQrFile && <p className="text-xs text-white/50">Ready to upload: {paymentQrFile.name}</p>}
+            {existingQrUrl && !paymentQrRemoved && !paymentQrPreviewUrl && <div className="flex items-center gap-3"><img src={fileUrl(existingQrUrl)} alt="Current event payment QR" className="h-28 w-28 rounded-lg bg-white object-contain p-1" /><button type="button" onClick={() => setPaymentQrRemoved(true)} className="text-sm text-advance">Remove current QR</button></div>}
+            {paymentQrRemoved && existingQrUrl && <p className="text-xs text-advance">Current QR will be removed when you save.</p>}
+          </div>}
+          <details>
+            <summary className="cursor-pointer text-sm text-white/65">Add payment instructions (optional)</summary>
+            <textarea className={`${inputClass} mt-2`} rows={3} value={paymentInstructions} onChange={(e) => setPaymentInstructions(e.target.value)} placeholder="Tell players where to send payment or what to include as reference" />
+          </details>
+        </section>
+        <details className="rounded-lg border border-white/10 p-4">
+          <summary className="cursor-pointer font-display font-semibold text-white">More setup options</summary>
+          <div className="mt-4 space-y-4">
+        {!isEditing && <div>
+          <label className="block text-sm text-white/70 mb-1">Existing tournament (optional)</label>
+          <select className={inputClass} value={tournamentId} onChange={(e) => setTournamentId(e.target.value)}>
+            <option value="">Create a new event tournament</option>
+            {tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name}</option>)}
+          </select>
+        </div>}
+        {!isEditing && !tournamentId && <div>
+          <label className="block text-sm text-white/70 mb-1">Event format</label>
+          <select className={inputClass} value={tournamentType} onChange={(e) => setTournamentType(e.target.value as typeof tournamentType)}>
+            <option value="RANDOM_PAIRING">Open play / random pairing</option>
+            <option value="FIXED_BRACKET">Fixed bracket tournament</option>
+          </select>
+        </div>}
+        <label className="block text-sm text-white/70">External registration link (optional)
+          <input
+            className={`${inputClass} mt-1`}
+            placeholder="https://…"
+            value={registrationLink}
+            onChange={(e) => setRegistrationLink(e.target.value)}
+          />
+        </label>
+
+        <div className="rounded-lg border border-white/10 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-display font-semibold text-white">In-app registration form (optional)</h3>
+            <button type="button" onClick={addField} className="text-sm text-ball hover:underline">
+              + Add field
+            </button>
+          </div>
+          <p className="text-xs text-white/50 mb-3">
+            Add fields to let players register right here, in addition to (or instead of) an external link.
+          </p>
+          {fields.map((f, i) => (
+            <div key={i} className="flex items-center gap-2 mb-2">
+              <input
+                className={`${inputClass} flex-1`}
+                placeholder="Field label, e.g. Team name"
+                value={f.label}
+                onChange={(e) => updateField(i, { label: e.target.value })}
+              />
+              <select
+                className="rounded-lg bg-white/10 border border-white/20 px-2 py-2 text-white text-sm"
+                value={f.type}
+                onChange={(e) => updateField(i, { type: e.target.value as RegistrationFieldType })}
+              >
+                {FIELD_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-1 text-xs text-white/60 whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  checked={!!f.required}
+                  onChange={(e) => updateField(i, { required: e.target.checked })}
+                />
+                required
+              </label>
+              <button type="button" onClick={() => removeField(i)} className="text-advance text-sm">
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <label className="block text-sm text-white/70 mb-1">Event photos (optional)</label>
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={(e) => setPhotos(e.target.files)}
+            className="text-sm text-white/70"
+          />
+          <p className="text-xs text-white/40 mt-1">
+            Up to 8 photos. Tournament photos are automatically deleted 14 days after upload.
+          </p>
+        </div>
+          </div>
+        </details>
+
+        {error && <p className="text-sm text-advance">{error}</p>}
+        <button
+          type="submit"
+          disabled={submitting}
+          className="rounded-lg bg-ball text-neutral-900 font-display font-semibold px-6 py-2 disabled:opacity-50"
+        >
+          {submitting ? (isEditing ? "Saving…" : "Publishing…") : isEditing ? "Save changes" : "Publish event"}
+        </button>
+      </form>}
+    </div>
+  );
+}
+
+function toLocalDateTime(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
