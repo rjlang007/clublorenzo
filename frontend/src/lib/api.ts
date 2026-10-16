@@ -34,6 +34,7 @@ export type PublicProfile = {
   username: string;
   bio: string;
   avatarUrl: string;
+  isSystemAccount: boolean;
   role: "SUPERADMIN" | "ADMIN" | "STAFF" | "PLAYER";
   trialStartedAt?: string | null;
   subscriptionExpiresAt?: string | null;

@@ -21,6 +21,8 @@ export default function Profile() {
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const isOwn = !!user && user.username === username;
+  const isSystemAccount = profile?.isSystemAccount === true;
+  const canEditProfile = isOwn && !isSystemAccount;
 
   function load() {
     if (!username) return;
@@ -36,10 +38,10 @@ export default function Profile() {
   useEffect(load, [username]);
 
   useEffect(() => {
-    if (isOwn) {
+    if (canEditProfile) {
       api.get<DefaultAvatarOption[]>("/users/default-avatars").then(({ data }) => setDefaults(data));
     }
-  }, [isOwn]);
+  }, [canEditProfile]);
 
   useEffect(() => {
     if (!selectedAvatar) {
@@ -93,11 +95,13 @@ export default function Profile() {
   return (
     <div className="max-w-3xl space-y-6">
       <PageHeader
-        eyebrow="Community profile"
-        title={profile.username}
-        description={profile.memberSince
-          ? `Member since ${new Date(profile.memberSince).toLocaleDateString()}`
-          : "Player profile and community activity."}
+        eyebrow={isSystemAccount ? "System account" : "Community profile"}
+        title={isSystemAccount ? "System" : profile.username}
+        description={isSystemAccount
+          ? "Platform operations and administration."
+          : profile.memberSince
+            ? `Member since ${new Date(profile.memberSince).toLocaleDateString()}`
+            : "Player profile and community activity."}
         actions={
           <img
             src={avatarPreview ?? (selectedDefaultAvatar ? fileUrl(selectedDefaultAvatar.url) : fileUrl(profile.avatarUrl))}
@@ -141,7 +145,17 @@ export default function Profile() {
         </section>
       )}
 
-      {!!profile.matchHistory?.length && (
+      {isSystemAccount ? (
+        <section className="rounded-2xl border border-ball/20 bg-ball/5 p-5 sm:p-6">
+          <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-ball">Purpose</p>
+          <h2 className="mt-1 font-display text-xl font-bold text-white">Platform administration</h2>
+          <p className="mt-2 text-sm leading-6 text-white/65">
+            This system account manages platform access and administration. It is not a player account and does not participate in events or matches.
+          </p>
+        </section>
+      ) : null}
+
+      {!isSystemAccount && !!profile.matchHistory?.length && (
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 sm:p-6">
           <div className="flex items-end justify-between gap-3">
             <div>
@@ -171,7 +185,7 @@ export default function Profile() {
         </section>
       )}
 
-      {isOwn ? (
+      {canEditProfile ? (
         <div className="space-y-6">
           <div>
             <label className="block text-sm text-white/70 mb-1">Your description</label>
@@ -243,7 +257,7 @@ export default function Profile() {
         <p className="text-white/80 whitespace-pre-wrap">{profile.bio || "No description yet."}</p>
       )}
 
-      {isOwn && (
+      {canEditProfile && (
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 sm:p-6">
           <div className="flex items-center justify-between gap-3">
             <div>

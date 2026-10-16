@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { UserRole } from "@prisma/client";
 import path from "path";
 import fs from "fs/promises";
 import { z } from "zod";
@@ -16,6 +17,7 @@ function toPublicProfile(user: {
   bio: string | null;
   avatarUrl: string | null;
   defaultAvatarKey: string;
+  role: UserRole;
   createdAt: Date;
 }) {
   return {
@@ -23,6 +25,7 @@ function toPublicProfile(user: {
     username: user.username,
     bio: user.bio ?? "",
     avatarUrl: user.avatarUrl ?? defaultAvatarUrl(user.defaultAvatarKey as any),
+    isSystemAccount: user.role === "SUPERADMIN",
     memberSince: user.createdAt,
   };
 }
@@ -52,9 +55,10 @@ usersRouter.get("/:username", attachUser, requireAuth, async (req: AuthedRequest
     });
   }
 
+  const isSystemAccount = user.role === "SUPERADMIN";
   const [playerStats, matchHistory, visits] = await Promise.all([
-    getPlayerStats(user.id),
-    getPlayerMatchHistory(user.id),
+    isSystemAccount ? Promise.resolve(null) : getPlayerStats(user.id),
+    isSystemAccount ? Promise.resolve(null) : getPlayerMatchHistory(user.id),
     viewerId === user.id
       ? prisma.profileVisit.findMany({
           where: { profileId: user.id },
