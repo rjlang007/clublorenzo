@@ -76,6 +76,13 @@
     border-color: rgba(113, 138, 255, 0.35);
   }
 
+  @media (hover: hover) and (prefers-reduced-motion: no-preference) {
+    .glass-panel:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.32);
+    }
+  }
+
   .brand-lockup {
     position: relative;
     width: fit-content;
@@ -146,11 +153,11 @@
   }
 
   .action-button {
-    @apply inline-flex items-center justify-center rounded-xl bg-ball px-4 py-2.5 text-sm font-bold text-white shadow-[0_10px_24px_rgba(48,76,220,0.35)] hover:translate-y-[-1px] hover:brightness-110;
+    @apply inline-flex items-center justify-center rounded-xl bg-ball px-4 py-2.5 text-sm font-bold text-white shadow-[0_10px_24px_rgba(48,76,220,0.35)] transition-all duration-200 hover:translate-y-[-1px] hover:brightness-110;
   }
 
   .secondary-button {
-    @apply inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 hover:border-white/20 hover:bg-white/[0.06] hover:text-white;
+    @apply inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 transition-all duration-200 hover:border-white/20 hover:bg-white/[0.06] hover:text-white;
   }
 
   .metric-card {
@@ -719,6 +726,23 @@
   .action-button,
   .secondary-button {
     min-height: 42px;
+  }
+
+  .page-heading {
+    align-items: stretch;
+  }
+
+  .page-heading-actions {
+    width: 100%;
+  }
+
+  .page-heading-actions > * {
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 auto;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: center;
   }
 
   .mobile-data-table {

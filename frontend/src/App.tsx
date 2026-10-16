@@ -94,10 +94,12 @@ function NotFound() {
 }
 
 function StandaloneShell({ children }: { children: ReactNode }) {
+  const location = useLocation();
+
   return (
     <div className="min-h-screen">
       <AppHeader />
-      <div id="main-content">{children}</div>
+      <div id="main-content" key={location.pathname} className="page-enter">{children}</div>
     </div>
   );
 }

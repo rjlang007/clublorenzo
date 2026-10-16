@@ -6,8 +6,9 @@ export default function Footer({ variant = "dark", name = clubLorenzo.name, tagl
     : "border-white/10 text-white/40";
 
   return (
-    <footer className={`border-t py-5 text-center text-[10px] uppercase tracking-[0.2em] ${appearance}`}>
-      {name} · {tagline}
+    <footer className={`border-t px-4 py-5 text-center ${appearance}`}>
+      <p className="text-[10px] uppercase tracking-[0.2em]">{name} · {tagline}</p>
+      <p className="mt-2 text-[10px] tracking-[0.08em]">Developed by Engr. R.J. Oculam</p>
     </footer>
   );
 }

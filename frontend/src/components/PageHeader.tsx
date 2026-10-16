@@ -13,7 +13,7 @@ export default function PageHeader({ eyebrow, title, description, actions }: {
         <h1 className="page-title">{title}</h1>
         {description && <p className="page-description">{description}</p>}
       </div>
-      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+      {actions && <div className="page-heading-actions flex min-w-0 flex-wrap items-center gap-2">{actions}</div>}
     </header>
   );
 }
