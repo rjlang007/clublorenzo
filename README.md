@@ -179,6 +179,12 @@ CORS_ORIGIN=https://<your-app-domain>
 JWT_SECRET=<unique-random-secret-at-least-32-characters>
 ```
 
+In Railway, add this under the app service's **Variables** settings (not just
+the PostgreSQL service). Replace `Postgres` with the exact name of your
+PostgreSQL service. The app container will stop with an actionable error if
+`DATABASE_URL` is missing; it cannot run migrations or serve database-backed
+features without a configured PostgreSQL connection.
+
 Generate a strong secret locally with
 `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
 and enter the output directly in Railway's variable settings. Do not commit it,
@@ -190,9 +196,8 @@ is limited to 10 attempts per 15 minutes and registration to 5 per hour per
 client IP. Rate-limit counters are in process memory, so horizontally scaled
 deployments should use a shared rate-limit store.
 
-Replace `Postgres` with the exact name of the Railway PostgreSQL service if it
-has a different name. Railway runs `prisma migrate deploy` before starting the
-server. The health check is `GET /health`.
+Railway runs `prisma migrate deploy` before starting the server. The health
+check is `GET /health`.
 
 Create a Railway volume mounted at `/app/backend/uploads` to persist uploaded
 avatars, tournament photos, payment QR codes, and payment receipts across

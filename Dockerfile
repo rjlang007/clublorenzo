@@ -26,4 +26,4 @@ COPY --from=backend-build /app/backend/dist ./dist
 COPY --from=backend-build /app/backend/public ./public
 COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
 EXPOSE 4000
-CMD ["sh", "-c", "npx prisma migrate deploy && npm run start"]
+CMD ["sh", "-c", "if [ -z \"$DATABASE_URL\" ]; then echo 'DATABASE_URL is required. In Railway, add a PostgreSQL service and set its DATABASE_URL as a variable on this app service.' >&2; exit 1; fi; npx prisma migrate deploy && npm run start"]
