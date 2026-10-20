@@ -51,6 +51,7 @@ export default function BracketView() {
   const [generatedPlayerCount, setGeneratedPlayerCount] = useState<number | null>(null);
   const [draggedPlayerId, setDraggedPlayerId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   useEffect(() => {
     api.get("/players", { params: { tournamentId } }).then((r) => setPlayers(r.data));
@@ -76,17 +77,26 @@ export default function BracketView() {
   });
   useEffect(loadMatches, [bracketId]);
 
-  const createBracket = async () => {
-    const { data } = await api.post("/brackets", { tournamentId, name: "Main Bracket", format });
-    setBracketId(data.id);
-  };
-
   const autoGenerate = async () => {
-    if (!bracketId) return;
+    if (!tournamentId || registeredPlayers.length < 2 || isGenerating) return;
     if (matches.length > 0 && !window.confirm("This replaces the current bracket and clears any slots you've already filled. Continue?")) return;
-    const { data } = await api.post(`/brackets/${bracketId}/auto-generate`, { format });
-    setGeneratedPlayerCount(data.participantCount);
-    loadMatches();
+    setActionError(null);
+    setIsGenerating(true);
+    try {
+      let targetBracketId = bracketId;
+      if (!targetBracketId) {
+        const { data } = await api.post("/brackets", { tournamentId, name: "Main Bracket", format });
+        targetBracketId = data.id;
+        setBracketId(data.id);
+      }
+      const { data } = await api.post(`/brackets/${targetBracketId}/auto-generate`, { format });
+      setGeneratedPlayerCount(data.participantCount);
+      setFormat(format);
+    } catch (error: any) {
+      setActionError(error?.response?.data?.error || "Could not generate the bracket. Please try again.");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const lockByes = async () => {
@@ -154,6 +164,7 @@ export default function BracketView() {
     return ids;
   }, [entries]);
 
+  const registeredPlayers = players.filter((player) => player.joinStatus === "APPROVED" && player.status !== "LEFT");
   const winners = matches.filter((m) => m.bracketSide === "WINNERS");
   const losers = matches.filter((m) => m.bracketSide === "LOSERS");
   const grandFinal = matches.find((m) => m.bracketSide === "GRAND_FINAL");
@@ -291,37 +302,37 @@ export default function BracketView() {
         {players.map((p) => <option key={p.id} value={p.name} />)}
       </datalist>
 
-      {!bracketId && canEdit && (
-        <div className="bg-white/5 border border-white/10 rounded-xl p-4 max-w-md">
-          <label className="text-xs text-white/50 block mb-2">Bracket format</label>
-          <div className="flex flex-col gap-2 mb-4">
-            {(Object.keys(FORMAT_LABELS) as BracketFormat[]).map((f) => (
-              <label key={f} className="flex items-center gap-2 text-sm">
-                <input type="radio" name="format" checked={format === f} onChange={() => setFormat(f)} />
-                {FORMAT_LABELS[f]}
-              </label>
-            ))}
-          </div>
-          <button onClick={createBracket} className="bg-ball text-neutral-900 font-display font-bold rounded-lg px-4 py-2">
-            Create Bracket
-          </button>
-        </div>
-      )}
-
-      {bracketId && canEdit && (
+      {canEdit && (
         <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-4">
-          <button onClick={autoGenerate} disabled={hasBracketGames} className="action-button w-full sm:w-auto disabled:opacity-40">
-            Generate {FORMAT_LABELS[format]} From Registered Players
+          <label className="flex flex-col gap-1 text-xs text-white/55">
+            Bracket format
+            <select
+              value={format}
+              onChange={(event) => setFormat(event.target.value as BracketFormat)}
+              disabled={isGenerating || hasBracketGames}
+              className="min-h-10 rounded-lg border border-white/10 bg-court-bg px-3 text-sm text-white"
+            >
+              {(Object.keys(FORMAT_LABELS) as BracketFormat[]).map((f) => <option key={f} value={f}>{FORMAT_LABELS[f]}</option>)}
+            </select>
+          </label>
+          <button
+            onClick={autoGenerate}
+            disabled={isGenerating || registeredPlayers.length < 2 || hasBracketGames}
+            className="action-button w-full self-end sm:w-auto disabled:opacity-40"
+          >
+            {isGenerating ? "Building bracket…" : bracketId ? `Generate ${FORMAT_LABELS[format]}` : `Create ${FORMAT_LABELS[format]} Bracket`}
           </button>
           {generatedPlayerCount !== null && <span className="text-sm text-white/70">Generated for {generatedPlayerCount} players.</span>}
-          {format !== "ROUND_ROBIN" && matches.length > 0 && (
+          {bracketId && format !== "ROUND_ROBIN" && matches.length > 0 && (
             <button onClick={lockByes} className="secondary-button w-full text-sm sm:ml-auto sm:w-auto">
               Lock Byes / Advance
             </button>
           )}
-          <span className="text-xs text-white/40 w-full">
-            Uses every approved player who has not left. Regenerate before any games are created; the new schedule replaces the current one.
+          <span className="w-full text-xs text-white/40">
+            {registeredPlayers.length} approved active {registeredPlayers.length === 1 ? "player" : "players"} will be included. Pending, rejected, and withdrawn registrations are excluded. Winners advance into the next open bracket slot when their game result is saved.
           </span>
+          {registeredPlayers.length < 2 && <span className="w-full text-xs text-ball/75">At least 2 approved active players are needed to generate a bracket.</span>}
+          {hasBracketGames && <span className="w-full text-xs text-white/40">This bracket already has games, so it cannot be regenerated without losing game history.</span>}
         </div>
       )}
 

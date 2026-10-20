@@ -37,7 +37,7 @@ club gear, and upcoming events, using the supplied blue-and-white branding.
 - Random-pairing matchmaking that enforces balanced doubles skill matchups
 - Approved open-play players can view their live queue spot or upcoming lineup and leave/rejoin the waiting pool from the event page
 - Staff can run the open-play Bunot-bunot draw from the live board's waiting queue; matchups are created by the server and revealed with a spin animation
-- Fixed-bracket (single-elimination) tournaments for pre-registered pairs
+- Staff can generate a complete bracket from approved, active tournament registrations; single elimination is the default, with double elimination and round robin also available. Elimination brackets include byes as needed and automatically advance recorded winners to their next match.
 - Per-court enable/disable, supports 2+ courts
 - Staff court control: manual Start / Pause / Resume / Finish + editable game timer
 - Public live kiosk display (all active courts, upcoming lineups, and ordered open-play waiting queue) via Socket.IO — staff can also draw matchups and jump to court controls from this board
